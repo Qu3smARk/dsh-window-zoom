@@ -9,8 +9,8 @@ corner, and supports the keyboard and Ctrl+wheel, with the factor stored per bro
 ## Install / uninstall
 
 ```powershell
-# install (link: points at this directory, so edits apply after a page refresh)
-dsh plugin --profile desktop add link:<this-directory>
+# install — copy-paste as is, it fetches this repository from GitHub
+dsh plugin --profile desktop add github:Qu3smARk/dsh-window-zoom
 
 # uninstall
 dsh plugin --profile desktop remove dsh-window-zoom
@@ -18,7 +18,16 @@ dsh plugin --profile desktop remove dsh-window-zoom
 
 After installing, refresh the page (or restart the DSH desktop app) and the control appears in the
 bottom-right corner. Replace `--profile` with your own profile name — the CLI's `dsh web`, for
-example, uses `web`.
+example, uses `web`. Re-run the install command to pick up newer commits, since a copy installed this
+way is a snapshot.
+
+Working on the code instead? Clone the repository and install it as a link, so your edits apply after
+a page refresh:
+
+```powershell
+git clone git@github.com:Qu3smARk/dsh-window-zoom.git
+dsh plugin --profile desktop add link:<absolute path to the clone>
+```
 
 ## Usage
 

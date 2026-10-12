@@ -8,15 +8,22 @@
 ## 安装 / 卸载
 
 ```powershell
-# 安装（link: 指向本目录，改代码后刷新页面即可生效）
-dsh plugin --profile desktop add link:<this-directory>
+# 安装（直接复制粘贴即可，会从 GitHub 拉取本仓库）
+dsh plugin --profile desktop add github:Qu3smARk/dsh-window-zoom
 
 # 卸载
 dsh plugin --profile desktop remove dsh-window-zoom
 ```
 
 装完刷新页面（或重启 DSH 桌面端）即可在右下角看到控件。`--profile` 换成你自己的 profile 名，
-例如 CLI 里的 `dsh web` 用的是 `web`。
+例如 CLI 里的 `dsh web` 用的是 `web`。这样装的是一个快照，想升级到最新提交就再跑一次安装命令。
+
+要改代码的话，克隆仓库后用 link: 安装，改完刷新页面即可生效：
+
+```powershell
+git clone git@github.com:Qu3smARk/dsh-window-zoom.git
+dsh plugin --profile desktop add link:<克隆到的绝对路径>
+```
 
 ## 用法
 
