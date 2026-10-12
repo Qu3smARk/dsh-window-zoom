@@ -1,0 +1,386 @@
+<!doctype html>
+<!--
+  Coordinate-shim regression test for dsh-window-zoom.
+
+  Reproduces, at `zoom: 1.5`, the three call patterns the bug report pointed at —
+  popover placement, viewport clamping and tab/indicator metrics — plus the
+  Lexical block cursor that the composer shows instead of the native caret. Each
+  pattern is written the way the app writes it (measure a rect, write a style),
+  then asserted in ON-SCREEN pixels using the native rect method captured before
+  the plugin patched anything.
+
+  Every assertion is also re-run with the shim switched off, where it must fail:
+  that is what makes the test sensitive to the underlying mismatch.
+
+  Run: chrome --headless=new --disable-gpu --force-device-scale-factor=1 \
+         --window-size=900,600 --virtual-time-budget=8000 --dump-dom test/shim.test.html
+-->
+<html lang="en" data-windows-titlebar style="--dsh-windows-titlebar-height: 40px">
+<head>
+<meta charset="utf-8">
+<title>dsh-window-zoom shim test</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #fff; font: 14px/1.4 monospace }
+  #anchor { position: fixed; left: 300px; top: 120px; width: 80px; height: 24px; background: #ddd }
+  #edge { position: fixed; left: 500px; top: 400px; width: 80px; height: 20px; background: #ddd }
+  #float { position: fixed; left: 0; top: 0; width: 160px; height: 60px; background: #cce }
+  #source { position: fixed; left: 200px; top: 200px; width: 120px; height: 10px; background: #ddd }
+  #indicator { position: fixed; left: 200px; top: 220px; height: 6px; background: #cce }
+  #editor { position: absolute; left: 200px; top: 260px; width: 300px; font: 16px/24px monospace; outline: none }
+  #caret { position: absolute; width: 2px; height: 10px; background: #e00000 }
+  #out { position: fixed; left: 8px; top: 8px; font-size: 11px; white-space: pre }
+</style>
+</head>
+<body>
+<div id="anchor"></div>
+<div id="edge"></div>
+<div id="float"></div>
+<div id="source"></div>
+<div id="indicator"></div>
+<div id="editor" contenteditable="true">iiiiiiiiii</div>
+<!-- Probes the reserved Windows caption strip: its height must stay 40 window
+     pixels, the size of the native minimize/maximize/close buttons. -->
+<div id="strip-probe" style="position:fixed;left:0;top:0;width:8px;height:var(--dsh-windows-titlebar-height)"></div>
+<!-- Mock of the desktop platform overlay: the viewport rect below becomes a
+     native child view's bounds, so it must keep root-frame coordinates. -->
+<div id="platform" role="dialog" aria-modal="true"
+     style="position:fixed;left:8px;top:40px;width:150px;height:60px">
+  <header data-window-drag="true" style="height:20px"></header>
+  <div id="platform-viewport" style="position:absolute;left:4px;top:24px;width:120px;height:30px"></div>
+</div>
+<pre id="out">running…</pre>
+<script>
+	// Captured before the plugin patches anything: the ground truth for what the
+	// user actually sees on screen (root-frame pixels).
+	const nativeElementRect = Element.prototype.getBoundingClientRect;
+	const nativeRangeRect = Range.prototype.getBoundingClientRect;
+	const nativeInnerWidth = window.innerWidth;
+	const FACTOR = 1.5;
+
+	const lines = [];
+	/** When set, assertions are expected to fail: that is the raw-zoom control. */
+	let expectBroken = false;
+	/** Record one assertion, honouring the raw-zoom control mode. */
+	function check(name, ok, extra) {
+		const verdict = expectBroken
+			? (ok ? "UNEXPECTED-PASS " : "OK-RAW ")
+			: (ok ? "PASS " : "FAIL ");
+		lines.push(verdict + name + (extra === undefined ? "" : " | " + extra));
+	}
+	/** On-screen rect, bypassing any plugin patch. */
+	function visual(element) {
+		const rect = nativeElementRect.call(element);
+		return { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom, width: rect.width, height: rect.height };
+	}
+	/** On-screen range rect, bypassing any plugin patch. */
+	function visualRange(range) {
+		const rect = nativeRangeRect.call(range);
+		return { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom, width: rect.width, height: rect.height };
+	}
+	/** Round for readable messages. */
+	const r1 = (value) => Math.round(value * 10) / 10;
+
+	const factories = {};
+	window.__ModuleLoader__ = { load: (spec) => { factories[spec.id] = spec.factory; } };
+
+	/** Load the plugin bundle and return its factory. */
+	async function loadPlugin(seq) {
+		await new Promise((resolve, reject) => {
+			const script = document.createElement("script");
+			script.src = "../lib/client.js?shim=" + seq;
+			script.onload = resolve;
+			script.onerror = () => reject(new Error("script failed to load"));
+			document.head.appendChild(script);
+		});
+		return factories["dsh-window-zoom"];
+	}
+
+	/** Fake client context mirroring the parts the plugin uses. */
+	function makeCtx() {
+		const disposers = [];
+		return {
+			effect: (fn) => { disposers.push(fn()); },
+			get: () => undefined,
+			disposeAll: () => {
+				for (const dispose of disposers.reverse()) if (typeof dispose === "function") dispose();
+			}
+		};
+	}
+
+	/** Click one button of the mounted control by its data attribute or glyph. */
+	function click(match) {
+		const buttons = [...document.querySelectorAll(".dsh-window-zoom button")];
+		const button = buttons.find(match);
+		button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+	}
+
+	/**
+	 * The app's popover pattern: anchor a floating box to a measured rect,
+	 * clamping it into the viewport.
+	 * @param anchorId - id of the anchor element to measure.
+	 */
+	function placePopover(anchorId) {
+		const anchor = document.getElementById(anchorId);
+		const float = document.getElementById("float");
+		const rect = anchor.getBoundingClientRect();
+		const width = float.offsetWidth;
+		let left = rect.right - width;
+		if (left + width > window.innerWidth) left = window.innerWidth - width;
+		float.style.left = Math.max(0, left) + "px";
+		float.style.top = rect.bottom + 6 + "px";
+	}
+
+	/** The app's dock/tab pattern: copy a measured size into a style. */
+	function placeIndicator() {
+		const source = document.getElementById("source");
+		const indicator = document.getElementById("indicator");
+		indicator.style.width = source.getBoundingClientRect().width + "px";
+	}
+
+	/**
+	 * Lexical's block-cursor pattern: the caret div is a child of the editable
+	 * root, positioned from the range rect relative to that root.
+	 */
+	function placeBlockCursor() {
+		const editor = document.getElementById("editor");
+		let caretElement = document.getElementById("caret");
+		if (caretElement === null) {
+			caretElement = document.createElement("div");
+			caretElement.id = "caret";
+			caretElement.contentEditable = "false";
+			editor.appendChild(caretElement);
+		}
+		const node = editor.firstChild;
+		const range = document.createRange();
+		range.setStart(node, 5);
+		range.collapse(true);
+		const caretRect = range.getBoundingClientRect();
+		const rootRect = editor.getBoundingClientRect();
+		caretElement.style.left = caretRect.left - rootRect.left + "px";
+		caretElement.style.top = caretRect.top - rootRect.top + "px";
+		caretElement.style.height = caretRect.height + "px";
+	}
+
+	/** Range rect of the caret position, for comparison. */
+	function caretRangeRect() {
+		const node = document.getElementById("editor").firstChild;
+		const range = document.createRange();
+		range.setStart(node, 5);
+		range.collapse(true);
+		return visualRange(range);
+	}
+
+	/**
+	 * Run the three patterns and assert their on-screen result.
+	 * @param suffix - label suffix distinguishing the shim state.
+	 */
+	function assertPatterns(suffix) {
+		placePopover("anchor");
+		const anchor = visual(document.getElementById("anchor"));
+		const float = visual(document.getElementById("float"));
+		check("popover right edges align" + suffix, Math.abs(float.right - anchor.right) < 1,
+			"float.right=" + r1(float.right) + " anchor.right=" + r1(anchor.right));
+		check("popover sits just below the anchor" + suffix,
+			float.top >= anchor.bottom - 1 && float.top <= anchor.bottom + 6 * FACTOR + 2,
+			"float.top=" + r1(float.top) + " anchor.bottom=" + r1(anchor.bottom));
+
+		// Park the edge anchor close enough to the right edge that the float must
+		// be clamped, whatever the window size is.
+		const edgeElement = document.getElementById("edge");
+		edgeElement.style.left = nativeInnerWidth / FACTOR - 60 + "px";
+		placePopover("edge");
+		const edge = visual(edgeElement);
+		const clamped = visual(document.getElementById("float"));
+		check("popover stays inside the viewport" + suffix, clamped.right <= nativeInnerWidth + 1,
+			"float.right=" + r1(clamped.right) + " viewport=" + nativeInnerWidth);
+		check("popover clamps flush to the viewport edge" + suffix,
+			Math.abs(clamped.right - nativeInnerWidth) <= 2,
+			"float.right=" + r1(clamped.right) + " viewport=" + nativeInnerWidth + " anchor.right=" + r1(edge.right));
+
+		placeBlockCursor();
+		const caret = visual(document.getElementById("caret"));
+		const expected = caretRangeRect();
+		check("block cursor x matches the caret position" + suffix, Math.abs(caret.left - expected.left) < 1.5,
+			"caret.left=" + r1(caret.left) + " range.left=" + r1(expected.left));
+		check("block cursor height matches the line height" + suffix, Math.abs(caret.height - expected.height) < 1.5,
+			"caret.height=" + r1(caret.height) + " range.height=" + r1(expected.height));
+	}
+
+	/**
+	 * The desktop platform overlay hands its viewport rect to the native bridge
+	 * as window DIP, so it must keep root-frame coordinates under zoom.
+	 * @param suffix - label suffix distinguishing the shim state.
+	 * @param shimActive - whether the shim is converting rects right now.
+	 */
+	function assertPlatformBounds(suffix, shimActive) {
+		const viewport = document.getElementById("platform-viewport");
+		const raw = nativeElementRect.call(viewport);
+		const reported = viewport.getBoundingClientRect();
+		const onScreen = visual(viewport);
+		check("native view bounds match the on-screen box" + suffix,
+			Math.abs(reported.x - onScreen.left) < 1 && Math.abs(reported.width - onScreen.width) < 1,
+			"bounds=" + r1(reported.x) + "/" + r1(reported.width) + " onScreen=" + r1(onScreen.left) + "/" + r1(onScreen.width));
+		check("platform overlay keeps root-frame coordinates" + suffix,
+			Math.abs(reported.x - raw.x) < 0.001 && Math.abs(reported.width - raw.width) < 0.001,
+			"reported.width=" + r1(reported.width) + " raw.width=" + r1(raw.width));
+		if (!shimActive) return;
+		// Selectivity: strip the platform marker and the very same node follows the shim.
+		const header = document.querySelector("#platform > header");
+		header.removeAttribute("data-window-drag");
+		const shimmed = viewport.getBoundingClientRect();
+		header.setAttribute("data-window-drag", "true");
+		check("the exemption is limited to the platform overlay" + suffix,
+			Math.abs(shimmed.width - raw.width / FACTOR) < 1,
+			"shimmed.width=" + r1(shimmed.width) + " expected=" + r1(raw.width / FACTOR));
+	}
+
+	/**
+	 * The shell's Windows caption strip must stay exactly as the shell wrote it:
+	 * the installed skin mixes that variable into its own title-bar geometry, so
+	 * compensating it fights the skin. The reserved strip is a layout-space
+	 * reservation, and the overlap it can cause is solved by moving the header's
+	 * right-hand clusters instead (see header.test.html).
+	 * @param suffix - label suffix distinguishing the state.
+	 * @param expectedFactor - the zoom factor in effect.
+	 */
+	function assertCaptionStrip(suffix, expectedFactor) {
+		const probe = visual(document.getElementById("strip-probe"));
+		const variable = document.documentElement.style.getPropertyValue("--dsh-windows-titlebar-height");
+		check("caption strip keeps the shell's own value" + suffix, variable === "40px", "var=" + variable);
+		check("caption strip stays a layout-space reservation" + suffix,
+			Math.abs(probe.height - 40 * expectedFactor) < 1,
+			"visual=" + r1(probe.height) + " expected=" + r1(40 * expectedFactor));
+	}
+
+	/**
+	 * Drive the control to an exact percentage.
+	 * @param label - the percentage label to reach, e.g. "80%".
+	 * @returns whether the label was reached.
+	 */
+	function setZoom(label) {
+		const read = () => document.querySelector(".dsh-window-zoom [data-dsh-window-zoom=value]").textContent;
+		const target = Number.parseInt(label, 10);
+		for (let guard = 0; guard < 60; guard += 1) {
+			const current = Number.parseInt(read(), 10);
+			if (current === target) return true;
+			click((b) => b.textContent === (current < target ? "+" : "−"));
+		}
+		return false;
+	}
+
+	async function main() {
+		localStorage.clear();
+		const factory = await loadPlugin(1);
+		const mod = factory(() => { throw new Error("unexpected require"); });
+
+		// 100%: the shim must be a no-op.
+		const ctx = makeCtx();
+		mod.apply(ctx);
+		const before = document.getElementById("source").getBoundingClientRect().width;
+		check("at 100% the rect is untouched", before === 120, "width=" + before);
+		assertCaptionStrip(" [100%]", 1);
+		check("at 100% the patterns are already correct", (() => {
+			placePopover("anchor"); placeIndicator(); placeBlockCursor();
+			const f = visual(document.getElementById("float"));
+			const a = visual(document.getElementById("anchor"));
+			const c = visual(document.getElementById("caret"));
+			return Math.abs(f.right - a.right) < 1 && Math.abs(c.left - caretRangeRect().left) < 1.5;
+		})());
+
+		// Zoom to 150%.
+		setZoom("150%");
+		check("control reached 150%", document.querySelector(".dsh-window-zoom [data-dsh-window-zoom=value]").textContent === "150%",
+			document.querySelector(".dsh-window-zoom [data-dsh-window-zoom=value]").textContent);
+		check("shim toggle is active by default", document.querySelector('[data-dsh-window-zoom=shim]').getAttribute("data-active") === "true");
+		assertCaptionStrip(" [150%]", 1.5);
+
+		// Root zoom splits the spaces; the shim must repair the app's math.
+		check("zoom is applied to the root", document.documentElement.style.getPropertyValue("zoom") === "1.5");
+		check("shimmed rect reports layout space", document.getElementById("source").getBoundingClientRect().width === 120,
+			"width=" + document.getElementById("source").getBoundingClientRect().width);
+		check("shimmed viewport reports layout space", window.innerWidth === Math.round(nativeInnerWidth / FACTOR),
+			"innerWidth=" + window.innerWidth + " native=" + nativeInnerWidth);
+		check("shimmed events report layout space", (() => {
+			const event = new MouseEvent("click", { clientX: 300, clientY: 150 });
+			return Math.abs(event.clientX - 300 / FACTOR) < 0.001;
+		})(), "clientX of a 300px point");
+		check("shimmed root client box reports layout space",
+			document.documentElement.clientWidth === Math.round(nativeElementRect.call(document.documentElement).width / FACTOR),
+			"clientWidth=" + document.documentElement.clientWidth);
+		check("non-root client box is untouched", document.getElementById("source").clientWidth === 120,
+			"clientWidth=" + document.getElementById("source").clientWidth);
+		check("point query accepts layout space", (() => {
+			const point = document.getElementById("source").getBoundingClientRect().left + 2;
+			return document.elementFromPoint(point, document.getElementById("source").getBoundingClientRect().top + 2) === document.getElementById("source");
+		})());
+
+		assertPatterns(" [shim on]");
+		assertPlatformBounds(" [shim on]", true);
+
+		// Switching the shim off must restore the raw (broken) behaviour. These
+		// assertions are asserted to FAIL: the raw-zoom control.
+		click((b) => b.getAttribute("data-dsh-window-zoom") === "shim");
+		check("shim toggle reports off", document.querySelector('[data-dsh-window-zoom=shim]').getAttribute("data-active") === "false");
+		check("unshimmed rect returns to root-frame space", document.getElementById("source").getBoundingClientRect().width === 180,
+			"width=" + document.getElementById("source").getBoundingClientRect().width);
+		check("unshimmed events return to root-frame space", new MouseEvent("click", { clientX: 300, clientY: 150 }).clientX === 300);
+		const before2 = lines.length;
+		expectBroken = true;
+		assertPatterns(" [shim off]");
+		expectBroken = false;
+		const rawFailures = lines.slice(before2).filter((line) => line.startsWith("OK-RAW")).length;
+		check("raw zoom is what the bug report described", rawFailures >= 4, rawFailures + " of 6 raw assertions failed as expected");
+
+		// The platform overlay is exempt in both states, so assert it without the
+		// raw-zoom expectation.
+		const rawExpectation = expectBroken;
+		expectBroken = false;
+		assertPlatformBounds(" [shim off]", false);
+		expectBroken = rawExpectation;
+
+		// Back on: the same patterns are correct again.
+		click((b) => b.getAttribute("data-dsh-window-zoom") === "shim");
+		const before3 = lines.length;
+		assertPatterns(" [shim on again]");
+		assertPlatformBounds(" [shim on again]", true);
+		const againFailures = lines.slice(before3).filter((line) => line.startsWith("FAIL"));
+		check("re-enabling the shim fixes them again", againFailures.length === 0, againFailures.length + " failures");
+
+		// Zoomed out is where the shell's reservation runs short of the native
+		// caption band. The strip is deliberately left untouched (the skin depends
+		// on its layout value); header.test.html covers the structural fix.
+		setZoom("80%");
+		check("control reached 80%", document.querySelector(".dsh-window-zoom [data-dsh-window-zoom=value]").textContent === "80%",
+			document.querySelector(".dsh-window-zoom [data-dsh-window-zoom=value]").textContent);
+		assertCaptionStrip(" [80%]", 0.8);
+		check("patterns still correct while zoomed out", (() => {
+			placePopover("anchor"); placeIndicator(); placeBlockCursor();
+			const f = visual(document.getElementById("float"));
+			const a = visual(document.getElementById("anchor"));
+			const c = visual(document.getElementById("caret"));
+			return Math.abs(f.right - a.right) < 1 && Math.abs(c.left - caretRangeRect().left) < 1.5;
+		})());
+		setZoom("100%");
+
+		// Unloading the plugin must leave the DOM prototypes exactly as found.
+		ctx.disposeAll();
+		check("dispose restores the native rect method",
+			document.getElementById("source").getBoundingClientRect().width === 120,
+			"width=" + document.getElementById("source").getBoundingClientRect().width);
+		check("dispose restores the native viewport", window.innerWidth === nativeInnerWidth,
+			"innerWidth=" + window.innerWidth + " native=" + nativeInnerWidth);
+		check("dispose releases the root zoom", document.documentElement.style.getPropertyValue("zoom") === "",
+			"zoom='" + document.documentElement.style.getPropertyValue("zoom") + "'");
+
+		const failed = lines.filter((line) => line.startsWith("FAIL") || line.startsWith("UNEXPECTED-PASS")).length;
+		document.getElementById("out").textContent = "RESULTS\n" + lines.join("\n") +
+			"\nSUMMARY total=" + lines.length + " failed=" + failed;
+	}
+
+	main().catch((error) => {
+		document.getElementById("out").textContent = "RESULTS\nFAIL harness error | " +
+			(error && error.message ? error.message : String(error)) + "\n" + lines.join("\n");
+	});
+</script>
+</body>
+</html>

@@ -1,0 +1,80 @@
+<!doctype html>
+<!--
+  Caret-geometry probe for dsh-window-zoom's bug report.
+
+  Question: under a root-level CSS `zoom`, does Chromium paint the text caret at
+  the position its own layout reports for that text offset?
+
+  The page renders one contenteditable line of monospace text and, per mode,
+  - focuses it and collapses the selection after the 5th character,
+  - prints the range rects for offset 0 and 5 (the browser's own answer),
+  - draws a GREEN 1px marker at style-coordinate `rect(5).left` — i.e. where
+    app code that writes a measured rect into a style property would put it,
+  - and leaves the native caret RED (`caret-color`).
+
+  Screenshotting each mode then shows whether red (native caret), the printed
+  range value, and green (style math) agree. Colors are unique in the page, so
+  columns are found without ambiguity.
+
+  Run:  chrome --headless=new --disable-gpu --force-device-scale-factor=1 \
+            --window-size=600,300 --virtual-time-budget=2000 \
+            --screenshot=caret-none.png  "caret.html#none"
+-->
+<html>
+<head>
+<meta charset="utf-8">
+<title>caret geometry probe</title>
+<style id="mode"></style>
+<style>
+  html, body { margin: 0; background: #ffffff; font: 20px/32px "Consolas", monospace; color: #000000 }
+  #ed { position: absolute; left: 40px; top: 40px; width: 400px; outline: none; caret-color: #e00000 }
+  #marker { position: absolute; top: 30px; height: 60px; width: 1px; background: #00c000 }
+  #out { position: absolute; left: 40px; top: 200px; font-size: 11px; white-space: pre }
+</style>
+</head>
+<body>
+<div id="ed" contenteditable="true">iiiiiiiiii</div>
+<div id="marker"></div>
+<pre id="out"></pre>
+<script>
+  const mode = location.hash.slice(1) || "none";
+  const MODES = {
+    none: "",
+    zoom: "html{zoom:1.5}",
+    transform: "body{width:calc(100%/1.5);height:calc(100%/1.5);transform:scale(1.5);transform-origin:0 0}"
+  };
+  document.getElementById("mode").textContent = MODES[mode] || "";
+
+  const ed = document.getElementById("ed");
+  const node = ed.firstChild;
+  const rectAt = (offset) => {
+    const range = document.createRange();
+    range.setStart(node, offset);
+    range.collapse(true);
+    return range.getBoundingClientRect();
+  };
+
+  ed.focus();
+  const selection = getSelection();
+  const caret = document.createRange();
+  caret.setStart(node, 5);
+  caret.collapse(true);
+  selection.removeAllRanges();
+  selection.addRange(caret);
+
+  const r0 = rectAt(0);
+  const r5 = rectAt(5);
+  document.getElementById("marker").style.left = r5.left + "px";
+
+  document.getElementById("out").textContent = "CARET " + JSON.stringify({
+    mode: mode,
+    edLeft: +ed.getBoundingClientRect().left.toFixed(2),
+    range0: +r0.left.toFixed(2),
+    range5: +r5.left.toFixed(2),
+    advance: +(r5.left - r0.left).toFixed(2),
+    innerWidth: innerWidth,
+    dpr: devicePixelRatio
+  });
+</script>
+</body>
+</html>

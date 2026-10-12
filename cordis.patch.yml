@@ -1,0 +1,8 @@
+# dsh-window-zoom bundle patch: inserts its plugin row into the web profile
+# roster. The single row mounts BOTH halves: the host half is a no-op (pure
+# browser plugin) and the browser half, served from this package's
+# lib/client.js, mounts the zoom control, registers its shortcuts and applies
+# the persisted factor.
+- insert:
+    - id: window-zoom
+      name: dsh-window-zoom

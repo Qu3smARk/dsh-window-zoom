@@ -1,0 +1,58 @@
+<!doctype html>
+<!--
+  Click-to-caret probe: does a real pointer click land on the character it
+  points at when the document root carries CSS `zoom`?
+
+  Driven over CDP (Input.dispatchMouseEvent) so the browser performs its own
+  hit testing; the page records what the event reported and where the caret
+  ended up. Window.__probe() returns the record as JSON.
+
+  With `zoom: 1.5` the text starts at visual x = 40 * 1.5 = 60 and each
+  monospace advance is 16.5 visual px, so a click at visual x = 142.5 aims at
+  the boundary after the 5th character.
+-->
+<html>
+<head>
+<meta charset="utf-8">
+<title>click to caret probe</title>
+<style>
+  html, body { margin: 0; background: #fff; font: 20px/32px "Consolas", monospace; color: #000 }
+  #ed { position: absolute; left: 40px; top: 40px; width: 320px; outline: none; background: #fff }
+</style>
+<style id="mode"></style>
+</head>
+<body>
+<div id="ed" contenteditable="true">iiiiiiiiii</div>
+<script>
+  if (location.hash === "#zoom") document.getElementById("mode").textContent = "html{zoom:1.5}";
+
+  const ed = document.getElementById("ed");
+  const log = [];
+
+  function caret() {
+    const selection = getSelection();
+    if (selection.rangeCount === 0) return null;
+    const range = selection.getRangeAt(0);
+    return { offset: range.startOffset, collapsed: range.collapsed, node: range.startContainer.nodeName };
+  }
+
+  ed.addEventListener("mousedown", (event) => {
+    log.push({ kind: "mousedown", clientX: event.clientX, clientY: event.clientY, offsetX: event.offsetX, offsetY: event.offsetY });
+  });
+  ed.addEventListener("mouseup", (event) => {
+    log.push({ kind: "mouseup", clientX: event.clientX, clientY: event.clientY, caret: caret() });
+  });
+  document.addEventListener("selectionchange", () => {
+    log.push({ kind: "selectionchange", caret: caret() });
+  });
+
+  window.__probe = () => JSON.stringify({
+    hash: location.hash,
+    rootZoom: getComputedStyle(document.documentElement).zoom,
+    editorRect: { left: ed.getBoundingClientRect().left, top: ed.getBoundingClientRect().top },
+    innerWidth: innerWidth,
+    log: log
+  });
+</script>
+</body>
+</html>

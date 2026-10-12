@@ -1,0 +1,78 @@
+<!doctype html>
+<!--
+  Coordinate-space probe for dsh-window-zoom.
+
+  Under a root-level CSS `zoom`, DOM measurement APIs split into two spaces:
+  the zoomed layout space (what style/offset/computed values use) and the
+  root-frame space (what rects/events/innerWidth report). App code assumes the
+  two agree, which is exactly what breaks under zoom.
+
+  This page measures one element with a known geometry in both spaces and
+  prints which API belongs to which, so the plugin's shim can convert exactly
+  the right set.
+
+  Run: chrome --headless=new --disable-gpu --window-size=800,400 \
+         --virtual-time-budget=2000 --dump-dom test/space-probe.html
+-->
+<html>
+<head>
+<meta charset="utf-8">
+<title>coordinate space probe</title>
+<style>
+  html, body { margin: 0; height: 100%; font: 12px monospace }
+  #box { position: absolute; left: 100px; top: 50px; width: 200px; height: 100px;
+         padding: 10px; border: 5px solid #000; overflow: auto; background: #eee }
+  #inner { width: 600px; height: 400px; background: #ccc }
+</style>
+<style id="mode"></style>
+</head>
+<body>
+<div id="box"><div id="inner"></div></div>
+<pre id="out"></pre>
+<script>
+  const F = 1.5;
+
+  /**
+   * Snapshot every measurement API for the probe element.
+   * @param label - name of the current mode.
+   * @returns the measurements.
+   */
+  function snap(label) {
+    const box = document.getElementById("box");
+    const inner = document.getElementById("inner");
+    const rect = box.getBoundingClientRect();
+    const rects = box.getClientRects();
+    const computed = getComputedStyle(box);
+    const hit = (x, y) => {
+      const element = document.elementFromPoint(x, y);
+      return element === null ? null : (element.id || element.tagName);
+    };
+    return {
+      label: label,
+      rect: [rect.left, rect.top, rect.width, rect.height],
+      clientRects: [rects.length, rects[0] === undefined ? null : rects[0].width],
+      offset: [box.offsetLeft, box.offsetTop, box.offsetWidth, box.offsetHeight],
+      client: [box.clientWidth, box.clientHeight, box.clientTop, box.clientLeft],
+      scroll: [box.scrollWidth, box.scrollHeight, box.scrollTop],
+      computed: [computed.width, computed.height],
+      innerOffset: [inner.offsetLeft, inner.offsetWidth],
+      innerRect: [inner.getBoundingClientRect().width],
+      viewport: [innerWidth, innerHeight, document.documentElement.clientWidth, document.documentElement.clientHeight],
+      hitAtRect: hit(rect.left + 1, rect.top + 1),
+      hitAtRectOverF: hit(rect.left / F + 1, rect.top / F + 1)
+    };
+  }
+
+  const style = document.getElementById("mode");
+  const rows = [];
+
+  style.textContent = "html{zoom:" + F + "}";
+  rows.push(snap("zoom1.5"));
+
+  style.textContent = "";
+  rows.push(snap("none"));
+
+  document.getElementById("out").textContent = "SPACE " + JSON.stringify(rows, null, 1);
+</script>
+</body>
+</html>

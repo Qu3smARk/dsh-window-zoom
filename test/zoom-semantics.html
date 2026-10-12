@@ -1,0 +1,71 @@
+<!doctype html>
+<!--
+  Evidence page for the layout decision behind dsh-window-zoom.
+
+  The plugin scales the whole GUI by putting CSS `zoom` on <html> and nothing
+  else. That is sufficient because the shell lays itself out with an
+  `html, body, #root { height: 100% }` chain — this page measures, in the same
+  Chromium the desktop app embeds, whether that chain still fills the window
+  under root zoom, and what happens to raw `vh` lengths.
+
+  Run:  chrome --headless=new --disable-gpu --window-size=1200,800 \
+            --virtual-time-budget=4000 --dump-dom test/zoom-semantics.html
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>root zoom semantics</title>
+<style>
+  html, body, #root { height: 100%; margin: 0; }
+  #out { position: fixed; left: 0; top: 0; z-index: 9; font: 12px/1.35 monospace; white-space: pre; }
+</style>
+</head>
+<body>
+<div id="root"><div id="pct" style="height:100%"></div></div>
+<!-- Fixed, so measuring a raw vh length cannot itself create a scrollbar. -->
+<div id="vh" style="position:fixed;left:0;top:0;width:10px;height:100vh;opacity:0;pointer-events:none"></div>
+<pre id="out">running…</pre>
+<script>
+	/** Candidate root declarations, in the order they are measured. */
+	const MODES = [
+		{ name: "baseline (no zoom)", css: "" },
+		{ name: "html { zoom: 1.5 }", css: "html{zoom:1.5}" },
+		{ name: "html { zoom: 0.6 }", css: "html{zoom:0.6}" },
+		{ name: "html { zoom: 1.5; width/height: 100%/1.5 }", css: "html{zoom:1.5;width:calc(100%/1.5);height:calc(100%/1.5)}" },
+		{ name: "html { zoom: 1.5; width/height: 66.667% }", css: "html{zoom:1.5;width:66.667%;height:66.667%}" }
+	];
+
+	/** The style element whose rule sets the measured mode. */
+	const probe = document.createElement("style");
+	document.head.appendChild(probe);
+
+	/**
+	 * Measure the current mode.
+	 * @returns one row of measurements.
+	 */
+	function measure() {
+		const root = document.getElementById("root").getBoundingClientRect();
+		const vh = document.getElementById("vh").getBoundingClientRect();
+		return {
+			viewport: innerWidth + "x" + innerHeight,
+			shell: Math.round(root.width) + "x" + Math.round(root.height),
+			shellFillsWindow: Math.round(root.width) === innerWidth && Math.round(root.height) === innerHeight,
+			vhHeight: Math.round(vh.height),
+			vhEqualsWindow: Math.round(vh.height) === innerHeight
+		};
+	}
+
+	const lines = [];
+	for (const mode of MODES) {
+		probe.textContent = mode.css;
+		const row = measure();
+		lines.push(mode.name);
+		lines.push("    viewport=" + row.viewport + "  shell(#root)=" + row.shell +
+			"  fillsWindow=" + row.shellFillsWindow);
+		lines.push("    100vh element height=" + row.vhHeight + "  equalsWindow=" + row.vhEqualsWindow);
+	}
+	probe.textContent = "";
+	document.getElementById("out").textContent = "SEMANTICS\n" + lines.join("\n");
+</script>
+</body>
+</html>

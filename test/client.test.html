@@ -1,0 +1,227 @@
+<!doctype html>
+<!--
+  dsh-window-zoom — browser-half behaviour test.
+
+  Runs the real lib/client.js in Chromium against a mock module loader, a
+  shell-shaped DOM (`html, body, #root { height: 100% }`) and a fake client
+  context, then prints PASS/FAIL lines into #out.
+
+  Run:  chrome --headless=new --disable-gpu --virtual-time-budget=8000 \
+            --dump-dom test/client.test.html
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>dsh-window-zoom client test</title>
+<style>html, body, #root { height: 100%; margin: 0 }</style>
+</head>
+<body>
+<div id="root"></div>
+<pre id="out">running…</pre>
+<script>
+	/** Collected results, printed into #out at the end. */
+	const lines = [];
+	/**
+	 * Record one assertion.
+	 * @param name - assertion name.
+	 * @param ok - whether it held.
+	 * @param extra - optional detail.
+	 */
+	function check(name, ok, extra) {
+		lines.push((ok ? "PASS " : "FAIL ") + name + (extra === undefined ? "" : " | " + extra));
+	}
+	/** Registered factories, keyed by module id. */
+	const factories = {};
+	window.__ModuleLoader__ = { load: (spec) => { factories[spec.id] = spec.factory; } };
+
+	/** Services handed to a fake client context. */
+	let services = {};
+	/** Disposers of the live fake context, newest last. */
+	let effectDisposers = [];
+	/**
+	 * Build a fake client root context.
+	 * @returns the context and its teardown.
+	 */
+	function makeCtx() {
+		const disposers = [];
+		const ctx = {
+			effect(fn, label) {
+				const dispose = fn();
+				disposers.push({ label, dispose });
+			},
+			get(name) {
+				return services[name];
+			}
+		};
+		return {
+			ctx,
+			disposeAll() {
+				for (const entry of disposers.reverse()) {
+					if (typeof entry.dispose === "function") entry.dispose();
+				}
+			}
+		};
+	}
+
+	/** Cache-busting counter: Chromium does not re-execute a script it already ran. */
+	let loadSeq = 0;
+	/**
+	 * Load lib/client.js and materialize it again, as the dsh module system does
+	 * once per plugin materialization.
+	 * @returns the registered factory.
+	 */
+	async function loadPlugin() {
+		loadSeq += 1;
+		await new Promise((resolve, reject) => {
+			const script = document.createElement("script");
+			script.src = "../lib/client.js?load=" + loadSeq;
+			script.onload = resolve;
+			script.onerror = () => reject(new Error("script failed to load"));
+			document.head.appendChild(script);
+		});
+		return factories["dsh-window-zoom"];
+	}
+
+	/**
+	 * Read a computed custom property from the root element.
+	 * @param name - custom property name.
+	 * @returns the inline value.
+	 */
+	function rootVar(name) {
+		return document.documentElement.style.getPropertyValue(name);
+	}
+
+	/** Click the nth button of the mounted control. */
+	function clickButton(match) {
+		const control = document.querySelector(".dsh-window-zoom");
+		const buttons = [...control.querySelectorAll("button")];
+		const button = buttons.find(match);
+		button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+		return button;
+	}
+
+	const rootZoom = () => document.documentElement.style.getPropertyValue("zoom");
+	const valueText = () => document.querySelector(".dsh-window-zoom [data-dsh-window-zoom=value]").textContent;
+
+	async function main() {
+		// --- scenario 1: cold start, no stored factor -------------------------
+		localStorage.clear();
+		const factory = await loadPlugin();
+		check("factory registered under the package id", typeof factory === "function");
+		const mod = factory(() => { throw new Error("unexpected require"); });
+		check("exports.apply", typeof mod.apply === "function");
+		check("exports.inject is empty", Array.isArray(mod.inject) && mod.inject.length === 0);
+		check("cold start leaves the root unscaled", rootZoom() === "", "zoom='" + rootZoom() + "'");
+
+		// --- scenario 2: control mounting and buttons ------------------------
+		let context = makeCtx();
+		mod.apply(context.ctx);
+		const control = document.querySelector(".dsh-window-zoom");
+		check("control mounted", control !== null);
+		check("readout mounted", document.querySelector(".dsh-window-zoom-toast") !== null);
+		check("control is a direct body child", control !== null && control.parentElement === document.body);
+		check("default dock is bottom-right", control.style.right === "18px" && control.style.bottom === "18px");
+		check("transform origin matches the corner", control.style.transformOrigin === "100% 100%", control.style.transformOrigin);
+		check("starts at 100%", valueText() === "100%", valueText());
+		check("counter-scale starts at 1", rootVar("--dsh-window-zoom-inverse") === "1");
+
+		clickButton((b) => b.textContent === "+");
+		check("zoom in applies 110%", rootZoom() === "1.1", rootZoom());
+		check("zoom in updates the label", valueText() === "110%", valueText());
+		check("zoom in persists", localStorage.getItem("dsh.windowZoom.factor") === "1.1");
+		check("counter-scale follows", rootVar("--dsh-window-zoom-inverse") === String(1 / 1.1), rootVar("--dsh-window-zoom-inverse"));
+		check("factor custom property set", rootVar("--dsh-window-zoom") === "1.1");
+
+		clickButton((b) => b.textContent === "−");
+		check("zoom out returns to 100%", rootZoom() === "", "zoom='" + rootZoom() + "'");
+
+		for (let i = 0; i < 25; i += 1) clickButton((b) => b.textContent === "+");
+		check("upper clamp holds at 250%", valueText() === "250%", valueText());
+		for (let i = 0; i < 40; i += 1) clickButton((b) => b.textContent === "−");
+		check("lower clamp holds at 50%", valueText() === "50%", valueText());
+		check("corner gap compensates the zoom", control.style.right === "36px", control.style.right);
+		check("readout top compensates the zoom", document.querySelector(".dsh-window-zoom-toast").style.top === "40px", document.querySelector(".dsh-window-zoom-toast").style.top);
+
+		clickButton((b) => b.getAttribute("data-dsh-window-zoom") === "value");
+		check("value button resets to 100%", valueText() === "100%" && rootZoom() === "");
+
+		clickButton((b) => b.getAttribute("data-dsh-window-zoom") === "grip");
+		check("grip cycles the dock", control.style.left === "18px" && control.style.bottom === "18px", control.style.cssText);
+		check("grip glyph follows the dock", document.querySelector(".dsh-window-zoom [data-dsh-window-zoom=grip]").textContent === "↙");
+		check("dock persists", localStorage.getItem("dsh.windowZoom.dock") === "bottom-left");
+
+		// --- scenario 3: keyboard fallback (no shortcut service) -------------
+		const press = (code) => window.dispatchEvent(new KeyboardEvent("keydown", { code, ctrlKey: true, altKey: true, bubbles: true, cancelable: true }));
+		press("Equal");
+		check("fallback Ctrl+Alt+= zooms in", valueText() === "110%", valueText());
+		press("Digit0");
+		check("fallback Ctrl+Alt+0 resets", valueText() === "100%", valueText());
+		press("Minus");
+		check("fallback Ctrl+Alt+- zooms out", valueText() === "90%", valueText());
+		press("Digit0");
+
+		// --- scenario 4: Ctrl+wheel -----------------------------------------
+		window.dispatchEvent(new WheelEvent("wheel", { deltaY: -100, ctrlKey: true, bubbles: true, cancelable: true }));
+		check("Ctrl+wheel up zooms in by 5%", valueText() === "105%", valueText());
+		window.dispatchEvent(new WheelEvent("wheel", { deltaY: 100, ctrlKey: true, bubbles: true, cancelable: true }));
+		check("Ctrl+wheel down zooms out by 5%", valueText() === "100%", valueText());
+		const plainWheel = new WheelEvent("wheel", { deltaY: -100, bubbles: true, cancelable: true });
+		window.dispatchEvent(plainWheel);
+		check("plain wheel is ignored", valueText() === "100%" && plainWheel.defaultPrevented === false);
+
+		// --- scenario 5: official shortcut service --------------------------
+		context.disposeAll();
+		check("dispose removes the control", document.querySelector(".dsh-window-zoom") === null);
+		check("dispose restores an unscaled root", rootZoom() === "", "zoom='" + rootZoom() + "'");
+		check("dispose keeps the stored factor", localStorage.getItem("dsh.windowZoom.factor") === "1");
+
+		const registered = [];
+		services = { shortcuts: { register: (spec) => { registered.push(spec); return () => {}; } } };
+		context = makeCtx();
+		mod.apply(context.ctx);
+		check("three commands registered", registered.length === 3, String(registered.length));
+		check("command ids", registered.map((s) => s.id).join(",") === "window-zoom.in,window-zoom.out,window-zoom.reset", registered.map((s) => s.id).join(","));
+		check("commands declare every profile", registered.every((s) => Object.keys(s.defaults).length === 6));
+		check("defaults use primary+alt", registered.every((s) => Object.values(s.defaults).every((b) => b.modifiers.join("+") === "primary+alt")));
+		check("default codes", registered.map((s) => s.defaults["desktop:windows"].code).join(",") === "Equal,Minus,Digit0");
+		const verdict = registered[0].resolve({ target: document.body });
+		check("resolve hands back a run", verdict.status === "handled" && typeof verdict.run === "function");
+		verdict.run();
+		check("registered command zooms", valueText() === "110%", valueText());
+		registered[2].resolve({}).run();
+		check("registered reset command", valueText() === "100%", valueText());
+		context.disposeAll();
+
+		// --- scenario 6: persisted factor applies at materialization ---------
+		localStorage.setItem("dsh.windowZoom.factor", "1.4");
+		localStorage.setItem("dsh.windowZoom.dock", "top-left");
+		services = {};
+		await loadPlugin();
+		check("registering the factory alone has no side effect", rootZoom() === "", "zoom='" + rootZoom() + "'");
+		const mod2 = factories["dsh-window-zoom"](() => { throw new Error("unexpected require"); });
+		check("materialization paints the stored factor", rootZoom() === "1.4", "zoom='" + rootZoom() + "'");
+		context = makeCtx();
+		mod2.apply(context.ctx);
+		check("control restores the stored label", valueText() === "140%", valueText());
+		const restored = document.querySelector(".dsh-window-zoom");
+		check("control restores the stored dock",
+			restored.style.right === "auto" && restored.style.bottom === "auto" &&
+			Math.abs(Number.parseFloat(restored.style.top) - 18 / 1.4) < 0.001 &&
+			Math.abs(Number.parseFloat(restored.style.left) - 18 / 1.4) < 0.001,
+			"top=" + restored.style.top + " left=" + restored.style.left + " right=" + restored.style.right);
+		context.disposeAll();
+		localStorage.setItem("dsh.windowZoom.factor", "not-a-number");
+		await loadPlugin();
+		check("garbage factor is ignored", factories["dsh-window-zoom"](() => { throw new Error("unexpected require"); }) !== undefined && rootZoom() === "", "zoom='" + rootZoom() + "'");
+
+		document.getElementById("out").textContent = "RESULTS\n" + lines.join("\n") +
+			"\nSUMMARY total=" + lines.length + " failed=" + lines.filter((l) => l.startsWith("FAIL")).length;
+	}
+
+	main().catch((error) => {
+		document.getElementById("out").textContent = "RESULTS\nFAIL harness error | " + (error && error.message ? error.message : String(error)) +
+			"\n" + lines.join("\n");
+	});
+</script>
+</body>
+</html>

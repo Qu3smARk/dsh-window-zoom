@@ -1,0 +1,36 @@
+{
+  "name": "dsh-window-zoom",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Window zoom plugin for the dsh web GUI: scales the whole interface (sidebar, chat, composer) from a floating control, the keyboard, or Ctrl+wheel, and persists the factor per browser profile.",
+  "type": "module",
+  "icon": "icon.svg",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "engines": {
+      "dsh": ">=0.2.0-rc.2"
+    },
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [],
+      "platform": "web"
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh": ">=0.2.0-rc.2"
+  },
+  "files": [
+    "lib",
+    "cordis.patch.yml",
+    "icon.svg",
+    "README.md"
+  ],
+  "license": "MIT"
+}

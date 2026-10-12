@@ -1,0 +1,57 @@
+<!doctype html>
+<!--
+  Visual preview harness for dsh-window-zoom: a static stand-in for the GUI
+  shell (not the real interface) that mounts the real lib/client.js, so the
+  control's look and placement can be inspected or screenshotted.
+
+  Run:  chrome --headless=new --disable-gpu --window-size=900,560 \
+            --virtual-time-budget=4000 --screenshot=preview.png test/preview.html
+-->
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>dsh-window-zoom preview</title>
+<style>
+  html, body, #root { height: 100%; margin: 0 }
+  body { background: #16181d; color: #e6e6e6; font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif }
+  .app { display: flex; height: 100% }
+  .side { width: 220px; background: #1d2026; padding: 16px; display: flex; flex-direction: column; gap: 10px }
+  .side strong { font-size: 13px; letter-spacing: .02em }
+  .row { opacity: .72; font-size: 13px }
+  .foot { margin-top: auto; opacity: .72; font-size: 13px }
+  .main { flex: 1; display: flex; flex-direction: column; padding: 20px; gap: 12px }
+  .bubble { background: #242833; border-radius: 10px; padding: 10px 13px; max-width: 60%; font-size: 13px }
+  .composer { margin-top: auto; background: #242833; border-radius: 12px; padding: 14px; color: #8b93a7; font-size: 13px }
+</style>
+</head>
+<body>
+<div id="root">
+  <div class="app">
+    <aside class="side">
+      <strong>DeepSeek Harness</strong>
+      <div class="row">会话 · 任务看板</div>
+      <div class="row">会话 · 插件开发</div>
+      <div class="foot">设置</div>
+    </aside>
+    <main class="main">
+      <div class="bubble">预览页：右下角挂载的是插件真实的缩放控件。</div>
+      <div class="composer">输入消息…</div>
+    </main>
+  </div>
+</div>
+<script>
+  try {
+    localStorage.removeItem("dsh.windowZoom.factor");
+    localStorage.removeItem("dsh.windowZoom.dock");
+  } catch { /* storage unavailable */ }
+  window.__ModuleLoader__ = { load: (spec) => { window.__factory = spec.factory; } };
+</script>
+<!-- Synchronous on purpose: the control is in the DOM before the first paint,
+     so a headless --screenshot captures it. -->
+<script src="../lib/client.js"></script>
+<script>
+  const mod = window.__factory(() => { throw new Error("unexpected require"); });
+  mod.apply({ effect: (fn) => { fn(); }, get: () => undefined });
+</script>
+</body>
+</html>

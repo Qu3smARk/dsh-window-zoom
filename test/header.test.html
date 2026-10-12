@@ -1,0 +1,245 @@
+<!doctype html>
+<!--
+  Header-relocation test for dsh-window-zoom — two scenarios.
+
+  A. No skin: the session header's clusters are in the document flow, and the
+     relocation moves them to the left edge with grid placement + `order`.
+     Structure and rules come from @deepseek-ai/dsh-client-ui-conversation:
+
+       header.grid(auto minmax(0,1fr))
+         ├─ headerLeading      (grid-area 1/1)
+         ├─ titleRow           (grid-column 2, flex)
+         │    ├─ titleCluster  (flex:1)  ── crumbs + headerActions
+         │    └─ headerUtilities (margin-left:20px)
+         ├─ headerCorner       (margin-left:8px; margin-right:-16px)
+         └─ tabs               (grid-column 1/-1)
+
+  B. claude-style skin's "header band" (reproduced from its bundle): the skin
+     marks the utilities/corner clusters and pins them as fixed elements in the
+     Windows title bar, with the horizontal offset it computes in *window*
+     pixels published as `--dsh-header-band-right`. Under zoom that offset is
+     applied as layout pixels, so the clusters slide onto the caption buttons.
+     The plugin must re-publish it divided by the factor, keeping the clusters
+     in the same title-bar band but clear of the minimize/maximize/close area.
+
+  Run: chrome --headless=new --disable-gpu --force-device-scale-factor=1 \
+         --window-size=1000,700 --virtual-time-budget=15000 --dump-dom test/header.test.html
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>dsh-window-zoom header relocation test</title>
+<style>
+  html, body { margin: 0; background: #14161b; color: #ddd; font: 13px system-ui }
+  /* Faithful subset of the app's session-header layout. */
+  .Mock_header { box-sizing: border-box; border-bottom: .5px solid #333; flex: none;
+    grid-template-columns: auto minmax(0, 1fr); min-height: 76px; padding: 10px 28px 0 20px; display: grid }
+  .Mock_headerLeading { flex: none; grid-area: 1 / 1; align-items: center; gap: 8px; display: flex }
+  .Mock_titleRow { min-height: 30px; grid-column: 2; align-items: center; gap: 0; display: flex }
+  .Mock_titleCluster { flex: 1; align-items: center; gap: 10px; min-width: 0; display: flex }
+  .Mock_crumbs { white-space: nowrap; align-items: center; gap: 4px; min-width: 0; display: flex; overflow: hidden }
+  .Mock_headerActions { flex: none; align-items: center; gap: 8px; display: flex }
+  .Mock_headerUtilities { flex: none; align-items: center; gap: 8px; margin-left: 20px; display: flex }
+  .Mock_headerUtilities:empty { display: none }
+  .Mock_headerCorner { flex: none; align-items: center; margin-left: 8px; margin-right: -16px; display: flex }
+  .Mock_headerCorner:empty { display: none }
+  .Mock_tabs { z-index: 1; grid-column: 1 / -1; gap: 36px; margin-top: 10px; padding-left: 8px; display: flex; position: relative }
+  .Mock_tab { background: 0 0; border: 0; color: #aaa; padding: 0 0 9px; font: inherit }
+  .icon { width: 24px; height: 24px; background: #6b7280; border: 0; border-radius: 4px }
+  /* The skin's title-bar band, copied from its bundle. */
+  body[data-dsh-claude-style][data-dsh-header-band~=actions] [data-dsh-header-actions],
+  body[data-dsh-claude-style][data-dsh-header-band~=actions] [data-dsh-header-corner] {
+    position: fixed !important; top: 20px !important; right: var(--dsh-header-band-right) !important;
+    margin: 0 !important; transform: translateY(-50%) !important; z-index: 30 !important }
+  #out { position: fixed; left: 8px; bottom: 8px; font-size: 11px; white-space: pre; opacity: .9 }
+</style>
+</head>
+<body>
+<header class="Mock_header" data-window-drag>
+  <div class="Mock_headerLeading"><button class="icon" id="leading"></button></div>
+  <div class="Mock_titleRow">
+    <div class="Mock_titleCluster">
+      <nav class="Mock_crumbs"><span>会话标题</span></nav>
+      <div class="Mock_headerActions"><button class="icon" id="action"></button></div>
+    </div>
+    <div class="Mock_headerUtilities">
+      <button class="icon" id="util1"></button><button class="icon" id="util2"></button>
+    </div>
+  </div>
+  <div class="Mock_headerCorner" data-conversation-header-corner><button class="icon" id="corner"></button></div>
+  <div class="Mock_tabs" data-conversation-tabs>
+    <button class="Mock_tab">对话</button><button class="Mock_tab">轨迹</button>
+  </div>
+</header>
+<pre id="out">running…</pre>
+<script>
+	// Captured before the plugin patches anything: what the screen really shows.
+	const nativeElementRect = Element.prototype.getBoundingClientRect;
+	const nativeInnerWidth = window.innerWidth;
+	const lines = [];
+	/** Record one assertion. */
+	function check(name, ok, extra) {
+		lines.push((ok ? "PASS " : "FAIL ") + name + (extra === undefined ? "" : " | " + extra));
+	}
+	/** On-screen rect, bypassing any plugin patch. */
+	function visual(element) {
+		const rect = nativeElementRect.call(element);
+		return { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom, width: rect.width, height: rect.height };
+	}
+	const r1 = (value) => Math.round(value * 10) / 10;
+	const $ = (selector) => document.querySelector(selector);
+	const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+	const factories = {};
+	window.__ModuleLoader__ = { load: (spec) => { factories[spec.id] = spec.factory; } };
+
+	/** Load the plugin bundle. */
+	async function loadPlugin() {
+		await new Promise((resolve, reject) => {
+			const script = document.createElement("script");
+			script.src = "../lib/client.js?header=2";
+			script.onload = resolve;
+			script.onerror = () => reject(new Error("script failed to load"));
+			document.head.appendChild(script);
+		});
+		return factories["dsh-window-zoom"];
+	}
+
+	/** Fake client context with collectable disposers. */
+	function makeCtx() {
+		const disposers = [];
+		return {
+			effect: (fn) => { disposers.push(fn()); },
+			get: () => undefined,
+			disposeAll: () => {
+				for (const dispose of disposers.reverse()) if (typeof dispose === "function") dispose();
+			}
+		};
+	}
+
+	/** Click one button of the mounted control. */
+	function clickControl(match) {
+		const button = [...document.querySelectorAll(".dsh-window-zoom button")].find(match);
+		button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+	}
+
+	/** Drive the control to an exact percentage. */
+	function setZoom(label) {
+		const read = () => document.querySelector(".dsh-window-zoom [data-dsh-window-zoom=value]").textContent;
+		const target = Number.parseInt(label, 10);
+		for (let guard = 0; guard < 60; guard += 1) {
+			const current = Number.parseInt(read(), 10);
+			if (current === target) return true;
+			clickControl((b) => b.textContent === (current < target ? "+" : "−"));
+		}
+		return false;
+	}
+
+	/** Turn the skin's title-bar band on in the mock. */
+	function enableSkinBand() {
+		document.body.setAttribute("data-dsh-claude-style", "");
+		document.body.setAttribute("data-dsh-header-band", "actions");
+		$(".Mock_headerCorner").setAttribute("data-dsh-header-corner", "");
+		$(".Mock_headerActions").setAttribute("data-dsh-header-actions", "");
+		$(".Mock_headerCorner").style.setProperty("--dsh-header-band-right", "146px");
+	}
+
+	/** Assert the in-flow relocation used when no skin occupies the title bar. */
+	function assertFlowRelocation(suffix, relocated) {
+		const header = visual($(".Mock_header"));
+		const leading = visual($(".Mock_headerLeading"));
+		const titleCluster = visual($(".Mock_titleCluster"));
+		const utilities = visual($(".Mock_headerUtilities"));
+		const corner = visual($(".Mock_headerCorner"));
+		const tabs = visual($(".Mock_tabs"));
+		if (relocated) {
+			check("utilities sit left of the title cluster" + suffix, utilities.right <= titleCluster.left + 1,
+				"utilities.right=" + r1(utilities.right) + " titleCluster.left=" + r1(titleCluster.left));
+			check("corner is the leftmost cluster" + suffix, corner.left < utilities.left,
+				"corner.left=" + r1(corner.left) + " utilities.left=" + r1(utilities.left));
+			check("leading slot still sits after the corner" + suffix, leading.left >= corner.right - 1,
+				"leading.left=" + r1(leading.left) + " corner.right=" + r1(corner.right));
+			check("tabs keep their own full-width row" + suffix, tabs.top > leading.top && tabs.width > header.width * 0.5,
+				"tabs.top=" + r1(tabs.top) + " width=" + r1(tabs.width));
+			check("actions cluster moves left of the crumbs" + suffix, visual($("#action")).right <= visual($(".Mock_crumbs")).left + 1,
+				"actions.right=" + r1(visual($("#action")).right) + " crumbs.left=" + r1(visual($(".Mock_crumbs")).left));
+		} else {
+			check("utilities sit right of the title cluster" + suffix, utilities.left >= titleCluster.right - 1,
+				"utilities.left=" + r1(utilities.left) + " titleCluster.right=" + r1(titleCluster.right));
+		}
+	}
+
+	/** Assert the title-bar placement used when the skin owns the band. */
+	function assertTitleBarPlacement(suffix, pinned) {
+		const corner = $(".Mock_headerCorner");
+		const actions = $(".Mock_headerActions");
+		const cornerBox = visual(corner);
+		const actionsBox = visual(actions);
+		const captionLeft = nativeInnerWidth - 138;
+		if (!pinned) {
+			check("no plugin pinning while released" + suffix, corner.style.getPropertyValue("position") === "",
+				"inline position='" + corner.style.getPropertyValue("position") + "'");
+			return;
+		}
+		check("clusters stay in the title bar band" + suffix,
+			cornerBox.top >= 0 && cornerBox.bottom <= 40 && actionsBox.top >= 0 && actionsBox.bottom <= 40,
+			"corner.top=" + r1(cornerBox.top) + " corner.bottom=" + r1(cornerBox.bottom));
+		check("clusters are horizontally clear of the caption buttons" + suffix, cornerBox.right <= captionLeft,
+			"corner.right=" + r1(cornerBox.right) + " captionLeft=" + r1(captionLeft));
+		check("the two clusters are stacked, not overlapping" + suffix, actionsBox.right < cornerBox.left,
+			"actions.right=" + r1(actionsBox.right) + " corner.left=" + r1(cornerBox.left));
+		check("the published offset is divided by the factor" + suffix,
+			Math.abs(Number.parseFloat(corner.style.getPropertyValue("right")) - 146 / 1.5) < 0.05,
+			"inline right='" + corner.style.getPropertyValue("right") + "' expected≈97.33");
+	}
+
+	async function main() {
+		localStorage.clear();
+		const factory = await loadPlugin();
+		const mod = factory(() => { throw new Error("unexpected require"); });
+		const ctx = makeCtx();
+		mod.apply(ctx);
+
+		// --- Scenario A: no skin, in-flow relocation ------------------------
+		check("relocation is on by default", document.documentElement.hasAttribute("data-dsh-window-zoom-header-left"));
+		assertFlowRelocation(" [flow]", true);
+		clickControl((b) => b.getAttribute("data-dsh-window-zoom") === "header-left");
+		check("toggle switched off", !document.documentElement.hasAttribute("data-dsh-window-zoom-header-left"));
+		assertFlowRelocation(" [flow, stock]", false);
+		clickControl((b) => b.getAttribute("data-dsh-window-zoom") === "header-left");
+		assertFlowRelocation(" [flow, back on]", true);
+
+		// --- Scenario B: the skin pins the clusters into the title bar ------
+		enableSkinBand();
+		await wait(300);
+		setZoom("150%");
+		await wait(600);
+		check("zoom is applied", document.documentElement.style.getPropertyValue("zoom") === "1.5");
+		assertTitleBarPlacement(" [band]", true);
+
+		// Turning the feature off must hand the clusters back to the skin.
+		clickControl((b) => b.getAttribute("data-dsh-window-zoom") === "header-left");
+		await wait(100);
+		assertTitleBarPlacement(" [band, released]", false);
+		check("skin's own rule applies again when released", getComputedStyle($(".Mock_headerCorner")).position === "fixed");
+
+		// Unloading must leave the elements exactly as the skin rendered them.
+		clickControl((b) => b.getAttribute("data-dsh-window-zoom") === "header-left");
+		await wait(600);
+		ctx.disposeAll();
+		check("dispose removes the header marker", !document.documentElement.hasAttribute("data-dsh-window-zoom-header-left"));
+		check("dispose releases the root zoom", document.documentElement.style.getPropertyValue("zoom") === "");
+		assertTitleBarPlacement(" [after dispose]", false);
+
+		const failed = lines.filter((line) => line.startsWith("FAIL")).length;
+		document.getElementById("out").textContent = "RESULTS\n" + lines.join("\n") +
+			"\nSUMMARY total=" + lines.length + " failed=" + failed;
+	}
+
+	main().catch((error) => {
+		document.getElementById("out").textContent = "RESULTS\nFAIL harness error | " +
+			(error && error.message ? error.message : String(error)) + "\n" + lines.join("\n");
+	});
+</script>
+</body>
+</html>
