@@ -1,5 +1,7 @@
 # dsh-window-zoom
 
+中文 | [English](README.en.md)
+
 给 DeepSeek Harness Web GUI 用的**整窗缩放插件**：把侧边栏、会话、输入框、弹层一起放大或缩小，
 右下角带一个常驻小控件，支持键盘与 Ctrl+滚轮，缩放比例按浏览器本地保存。
 
@@ -84,7 +86,7 @@ Chromium 实测过（见 `test/zoom-semantics.html`，视口 1184×705）：
 `clientWidth,clientHeight`），并让 `elementFromPoint` 一族接受布局空间坐标。100% 时每个补丁直接
 透传，等于没装；插件卸载时逐条还原。命中测试本身由 Blink 内部完成，不受影响（实测点击落点正确）。
 
-判断是否开关它：`test/shim.test.html` 会在同一页里跑两遍同样的调用模式，开启时 45 项断言全绿，
+判断是否开关它：`test/shim.test.html` 会在同一页里跑两遍同样的调用模式，开启时 53 项断言全绿，
 关闭时那 6 条位置断言**全部**按 bug 描述失败。
 
 ### 例外：桌面端的原生平台视图
@@ -170,6 +172,14 @@ html[data-dsh-window-zoom-header-left]
 
 （皮肤在情况一下把这两个容器变成 `position:fixed`，网格规则对它们自然失效，两条路径互不干扰。）
 
+- 选择器只命中**会话顶栏**（唯一同时拥有 `titleRow` 与 `headerCorner`/`headerUtilities` 的
+  `header`），平台视图、设置面板等其它 surfaces 不受影响。
+- 结构取自 `@deepseek-ai/dsh-client-ui-conversation` 的真实 JSX 与 CSS：`header` 是
+  `grid(auto minmax(0,1fr))`，`titleRow` 是 flex 且含 `titleCluster` + `headerUtilities`，
+  `headerCorner` 是与 `titleRow` 同级的 grid 项。`test/header.test.html` 用这份结构搭了 mock，
+  断言左移后 utilities 落在标题簇左侧、角标最靠左、并且 150% 缩放下依然成立、卸载后完全还原。
+- `!important` 只用于压过皮肤对同一批容器的规则。
+
 ### 顶栏自诊断
 
 顶栏的真实结构取决于装了什么皮肤（`dsh-claude-style` 会自己重排、搬动这些容器），所以插件带一个
@@ -185,14 +195,6 @@ html[data-dsh-window-zoom-header-left]
 - 触发时机：页面加载后 2 秒、6 秒各一次，之后顶栏有变化时去抖 1.5 秒再写；**每次页面加载最多 8 次**，
   始终覆盖同一个文件。内容只有结构与坐标，不含图片或凭据。
 - 宿主半区是**新增**代码，改完需要**重启 DSH 桌面端**（宿主进程）才会挂上这条路由；只刷新页面不会。
-
-- 选择器只命中**会话顶栏**（唯一同时拥有 `titleRow` 与 `headerCorner`/`headerUtilities` 的
-  `header`），平台视图、设置面板等其它 surfaces 不受影响。
-- 结构取自 `@deepseek-ai/dsh-client-ui-conversation` 的真实 JSX 与 CSS：`header` 是
-  `grid(auto minmax(0,1fr))`，`titleRow` 是 flex 且含 `titleCluster` + `headerUtilities`，
-  `headerCorner` 是与 `titleRow` 同级的 grid 项。`test/header.test.html` 用这份结构搭了 mock，
-  断言左移后 utilities 落在标题簇左侧、角标最靠左、并且 150% 缩放下依然成立、卸载后完全还原。
-- `!important` 只用于压过皮肤对同一批容器的规则。
 
 ## 已知限制
 
@@ -235,7 +237,7 @@ chrome --headless=new --disable-gpu --force-device-scale-factor=1 --window-size=
 | 路径 | 作用 |
 | --- | --- |
 | `lib/client.js` | 浏览器半区：控件、快捷键、滚轮、持久化、缩放施加、坐标校正 |
-| `lib/index.js` | 宿主半区：空实现（纯浏览器插件） |
+| `lib/index.js` | 宿主半区：仅诊断路由（回环限定） |
 | `cordis.patch.yml` | profile 补丁：插入 `window-zoom` 插件行 |
 | `test/*.html`、`test/*.mjs` | 无头 Chromium 测试、实测页与 CDP 驱动 |
 | `test/preview-control.png` | 控件外观截图 |
