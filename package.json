@@ -30,7 +30,8 @@
     "lib",
     "cordis.patch.yml",
     "icon.svg",
-    "README.md"
+    "README.md",
+    "README.zh.md"
   ],
   "license": "MIT"
 }

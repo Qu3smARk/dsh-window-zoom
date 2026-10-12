@@ -1,98 +1,111 @@
 # dsh-window-zoom
 
-中文 | [English](README.en.md)
+English | [中文](README.zh.md)
 
-给 DeepSeek Harness Web GUI 用的**整窗缩放插件**：把侧边栏、会话、输入框、弹层一起放大或缩小，
-右下角带一个常驻小控件，支持键盘与 Ctrl+滚轮，缩放比例按浏览器本地保存。
+A **whole-window zoom plugin for the DeepSeek Harness web GUI**: it scales the sidebar, the
+conversation, the composer and overlays together, keeps a small always-on control in the bottom-right
+corner, and supports the keyboard and Ctrl+wheel, with the factor stored per browser profile.
 
-## 安装 / 卸载
+## Install / uninstall
 
 ```powershell
-# 安装（link: 指向本目录，改代码后刷新页面即可生效）
+# install (link: points at this directory, so edits apply after a page refresh)
 dsh plugin --profile desktop add link:<this-directory>
 
-# 卸载
+# uninstall
 dsh plugin --profile desktop remove dsh-window-zoom
 ```
 
-装完刷新页面（或重启 DSH 桌面端）即可在右下角看到控件。`--profile` 换成你自己的 profile 名，
-例如 CLI 里的 `dsh web` 用的是 `web`。
+After installing, refresh the page (or restart the DSH desktop app) and the control appears in the
+bottom-right corner. Replace `--profile` with your own profile name — the CLI's `dsh web`, for
+example, uses `web`.
 
-## 用法
+## Usage
 
-| 操作 | 方式 |
+| Action | How |
 | --- | --- |
-| 放大 | 控件 `+`，或 `Ctrl+Alt+=` |
-| 缩小 | 控件 `−`，或 `Ctrl+Alt+-` |
-| 回到 100% | 点控件中间的百分比，或 `Ctrl+Alt+0` |
-| 精细缩放 | `Ctrl+滚轮`（每次 5%） |
-| 换位置 | 点控件左侧的箭头手柄，在四个角落间轮换 |
-| 坐标校正开关 | 点 `⇔`（默认开启，见下） |
-| 顶栏控件左移 | 点 `⇤`（默认开启，见下） |
+| Zoom in | the control's `+`, or `Ctrl+Alt+=` |
+| Zoom out | the control's `−`, or `Ctrl+Alt+-` |
+| Back to 100% | click the percentage in the middle of the control, or `Ctrl+Alt+0` |
+| Fine zoom | `Ctrl+wheel` (5% per step) |
+| Move the control | click the arrow grip on its left to cycle the four corners |
+| Coordinate-correction toggle | click `⇔` (on by default, see below) |
+| Header controls to the left | click `⇤` (on by default, see below) |
 
-- 范围 50% – 250%，步进 10%，快捷键可在「设置 → 快捷键」里改绑。
-- 比例与控件停靠角存在 localStorage（`dsh.windowZoom.factor` / `dsh.windowZoom.dock`），
-  下次打开沿用。
-- 控件自身做了反向缩放，因此在 250% 下依然是原尺寸，不会被推出屏幕。
-- 内嵌终端（xterm）里 `Ctrl+滚轮` 不拦截，交还给终端自己处理。
+- Range 50% – 250%, 10% steps; the shortcuts can be rebound under Settings → Shortcuts.
+- The factor and the docked corner live in localStorage
+  (`dsh.windowZoom.factor` / `dsh.windowZoom.dock`) and are restored next time.
+- The control counter-scales itself, so it keeps its original size at 250% and is never pushed off
+  screen.
+- Inside the embedded terminal (xterm) `Ctrl+wheel` is not intercepted and stays with the terminal.
 
-## 实现
+## Implementation
 
-缩放只做一件事：在 `<html>` 上写 CSS `zoom`。
+Zooming does exactly one thing: it writes the CSS `zoom` property on `<html>`.
 
 ```js
 document.documentElement.style.zoom = String(factor);
 ```
 
-之所以一行就够，是因为这个外壳用 `html, body, #root { height: 100% }` 链布局：Chromium 在根元素
-带 `zoom` 时会同步缩放 initial containing block，百分比链因此仍然正好铺满窗口。这一点用无头
-Chromium 实测过（见 `test/zoom-semantics.html`，视口 1184×705）：
+One line is enough because this shell lays itself out with an
+`html, body, #root { height: 100% }` chain: when the root element carries `zoom`, Chromium scales the
+initial containing block along with it, so the percentage chain still fills the window exactly. That
+was measured against headless Chromium (see `test/zoom-semantics.html`, viewport 1184×705):
 
-| 根元素声明 | `#root` 实测尺寸 | 是否铺满窗口 | `100vh` 实测高度 |
+| Root declaration | measured `#root` | fills the window | measured `100vh` |
 | --- | --- | --- | --- |
-| 无 | 1184×705 | 是 | 705（= 窗口高） |
-| `zoom: 1.5` | 1184×705 | **是** | 1058（≈ 1.5 倍窗口高） |
-| `zoom: 0.6` | 1184×705 | **是** | 423（≈ 0.6 倍窗口高） |
-| `zoom: 1.5` + `width/height: 100%/1.5` | 789×470 | 否（重复补偿） | 1058 |
+| none | 1184×705 | yes | 705 (= window height) |
+| `zoom: 1.5` | 1184×705 | **yes** | 1058 (≈ 1.5 × window height) |
+| `zoom: 0.6` | 1184×705 | **yes** | 423 (≈ 0.6 × window height) |
+| `zoom: 1.5` + `width/height: 100%/1.5` | 789×470 | no (double compensation) | 1058 |
 
-结论：根元素缩放已经处理好了 `100%` 链，**不能**再手动补偿宽高，否则外壳只剩约 2/3；唯一不跟随
-的是原始 `vh`/`vw` 长度，而外壳只在弹层的 `max-height` 上用到它们。
+Conclusion: the root zoom already handles the `100%` chain, so width/height must **not** be
+compensated as well — doing so leaves the shell at roughly two thirds of the window. The only lengths
+that do not follow are raw `vh`/`vw`, and the shell uses those for overlay `max-height` only.
 
-控件用 `--dsh-window-zoom-inverse`（即 `1 / factor`）做反向 `scale()`，保证自身尺寸恒定。
+The control counter-scales through `--dsh-window-zoom-inverse` (`1 / factor`) so its size stays
+constant.
 
-## 坐标校正（shim）
+## Coordinate correction (the shim)
 
-只写 `zoom` 会**把 DOM 的坐标系劈成两半**，这是之前三个问题的共同根因：
+Writing `zoom` alone **splits the DOM's coordinate system in two**, which was the shared root cause of
+three earlier bugs:
 
-| API | 根元素 `zoom: 1.5` 下的实测值（元素宽 200，左侧 100） | 所属空间 |
+| API | measured under a root `zoom: 1.5` (element 200 wide at left 100) | space |
 | --- | --- | --- |
-| `getBoundingClientRect()` | left 150、width 344 | 根框架（视觉）像素 |
-| `getClientRects()` / Range 同名方法 | width 344 | 根框架 |
-| 鼠标事件 `clientX/clientY/offsetX/offsetY` | 按视觉像素上报（实测 `clientX=142`） | 根框架 |
-| `innerWidth` / `documentElement.clientWidth` | 784 / 769（不随缩放变化） | 根框架 |
-| 样式写入、`offsetWidth`、`computed style`、`scroll*` | 100 左右、width 229 | 缩放后的布局像素 |
-| 非根元素 `clientWidth` | 210 | 布局像素 |
+| `getBoundingClientRect()` | left 150, width 344 | root-frame (visual) pixels |
+| `getClientRects()` / the Range equivalents | width 344 | root frame |
+| mouse `clientX/clientY/offsetX/offsetY` | reported in visual pixels (measured `clientX=142`) | root frame |
+| `innerWidth` / `documentElement.clientWidth` | 784 / 769 (unchanged by the zoom) | root frame |
+| style writes, `offsetWidth`, `computed style`, `scroll*` | around 100, width 229 | zoomed layout pixels |
+| `clientWidth` of non-root elements | 210 | layout pixels |
 
-应用代码是按「两者一致」（也就是没有缩放时）写的，于是所有"量 rect → 写样式"的地方都会落到
-`rect × factor` 上：
+Application code was written against "both agree" — that is, against no zoom — so every place that
+*measures a rect and writes a style* lands on `rect × factor`:
 
-- **弹层/账号菜单**：`left = rect.right - offsetWidth` → 位置偏 `×1.5`，跑到屏幕外；
-- **【对话|轨迹】页签**：dock 度量把 rect 宽高当 CSS 变量用 → 指示条错位；
-- **输入框光标**：Lexical 会把原生光标置为 `caret-color: transparent`，自己用一个 div 当光标
-  （blockCursor），该 div 的位置与高度都来自 rect 数学 → 光标画在别处、还高了一截。
+- **menus and the account popover**: `left = rect.right - offsetWidth` → off by ×1.5, i.e. off screen;
+- **the 【Conversation|Trajectory】 tab strip**: the dock metrics use rect width/height as CSS
+  variables → the indicator misses its tab;
+- **the composer caret**: Lexical sets the native caret to `caret-color: transparent` and paints its
+  own `div` (the block cursor) whose position and height both come from rect math → the caret is drawn
+  somewhere else and noticeably too tall.
 
-`⇔` 开关就是这层校正：把根框架那一组 API 折算回布局空间（rect/rect 列表/鼠标坐标
-`clientX,clientY,offsetX,offsetY,pageX,pageY,x,y`/`innerWidth,innerHeight`/根元素
-`clientWidth,clientHeight`），并让 `elementFromPoint` 一族接受布局空间坐标。100% 时每个补丁直接
-透传，等于没装；插件卸载时逐条还原。命中测试本身由 Blink 内部完成，不受影响（实测点击落点正确）。
+The `⇔` toggle is that correction: it converts the root-frame API group back into layout space (rects
+and rect lists, the mouse coordinates `clientX,clientY,offsetX,offsetY,pageX,pageY,x,y`,
+`innerWidth,innerHeight`, the root element's `clientWidth,clientHeight`) and lets the
+`elementFromPoint` family accept layout-space coordinates. At 100% every patch passes straight through,
+so it is as if the plugin were not installed; unloading restores each one. Hit testing itself happens
+inside Blink and is unaffected (measured: clicks still land on the intended character).
 
-判断是否开关它：`test/shim.test.html` 会在同一页里跑两遍同样的调用模式，开启时 53 项断言全绿，
-关闭时那 6 条位置断言**全部**按 bug 描述失败。
+To judge whether it matters: `test/shim.test.html` runs the same call patterns twice on one page — all
+53 assertions pass with the shim on, and with it off those 6 geometry assertions **all** fail exactly
+as the original bug report described.
 
-### 例外：桌面端的原生平台视图
+### Exception: the desktop's native platform view
 
-账号 → 设置里的「用量」等页面不是文档的一部分：`dsh-client-ui-settings-account` 会把一个
-`position:fixed; inset:0` 的 overlay 里的 viewport 元素量出来交给原生桥：
+Pages such as the account Settings → Usage window are not part of the document:
+`dsh-client-ui-settings-account` measures the viewport element of a `position:fixed; inset:0` overlay
+and hands it to the native bridge:
 
 ```js
 const bounds = () => { const r = viewport.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height } };
@@ -100,36 +113,42 @@ bridge.open(page, bounds());            // dshPlatform.open  → WebContentsView
 new ResizeObserver(() => bridge.setBounds(bounds()));
 ```
 
-主进程把它当**窗口 DIP** 用来摆放一个原生子视图。所以这棵子树必须保持根框架坐标——校正层对它
-显式豁免，选择器 `[role=dialog][aria-modal=true]:has(header[data-window-drag])`（实测：豁免时
-上报 180px = 屏幕上的 180px；去掉平台标记后同一节点立刻按 1/1.5 折算成 120px，证明豁免是精确的、
-不外溢的）。整个客户端里只有这个 overlay 是"dialog 里带 `header[data-window-drag]`"——
-其它拖拽条都挂在 `div` 上，会话顶栏也不在 dialog 内。
+The main process treats that as **window DIP** when placing a native child view, so this subtree has to
+keep root-frame coordinates — the correction layer exempts it explicitly, with the selector
+`[role=dialog][aria-modal=true]:has(header[data-window-drag])` (measured: exempt, it reports 180px =
+the 180px on screen; strip the platform marker and the very same node is immediately divided by 1.5
+into 120px, which shows the exemption is exact and does not leak). That overlay is the only "dialog
+containing a `header[data-window-drag]`" in the whole client — every other drag band hangs off a `div`,
+and the session header is not inside a dialog.
 
-反过来说，**原生子视图永远盖在窗口 DOM 之上**：这个页面打开时，右下角的缩放控件（以及宠物）
-会被它挡住，点不到。要调缩放请先关掉该页面（或先调好再打开）；快捷键 `Ctrl+Alt+=` / `-` / `0`
-在焦点回到主界面后同样有效。
+Conversely, **a native child view always paints above the window's DOM**: while that page is open it
+covers the zoom control in the bottom-right corner (and the pet), so they cannot be clicked. Adjust the
+zoom before opening it (or close it first); the `Ctrl+Alt+=` / `-` / `0` shortcuts work again once focus
+returns to the main UI.
 
-## Windows 标题栏与右上角控件
+## The Windows title bar and the top-right controls
 
-桌面端用 `titleBarStyle: "hidden"` + `titleBarOverlay: { height: 40 }`：最小化/最大化/关闭按钮是
-**覆盖在网页内容之上**的固定 40 窗口像素，应用靠预加载脚本注入的
-`--dsh-windows-titlebar-height: 40px`（布局像素）自己让出这条带子。缩放后这条带子的物理高度
-变成 `40 × 系数`，会话顶栏右侧的控件就会在缩小时滑进按钮带、在放大时被整体压低。
+The desktop shell uses `titleBarStyle: "hidden"` with `titleBarOverlay: { height: 40 }`: the
+minimize/maximize/close buttons are a fixed 40 window pixels **painted over the page content**, and the
+app reserves that band itself through the preload-injected `--dsh-windows-titlebar-height: 40px`
+(layout pixels). After zooming, the band's physical height becomes `40 × factor`, so the session
+header's right-hand controls slide into the button band when zooming out and are pushed down when
+zooming in.
 
-**试过、已回退的做法**：把该变量按 `1/factor` 补偿，让带子的物理高度恒为 40px。实测无效且更糟——
-`dsh-claude-style` 这类皮肤会把 `--dsh-windows-titlebar-height` 混进自己的顶栏几何
-（例如 `box-shadow: 0 calc(-1 * var(--dsh-windows-titlebar-height)) 0 0 …`，以及按 `titleRow` /
-`headerUtilities` / `headerCorner` 量 rect 后重排标签页），改动这个变量等于同时改坏皮肤，
-于是出现"彻底重叠"。所以插件**不再触碰该变量**（`test/shim.test.html` 会断言它始终保持
-桌面端写入的原值）。
+**Tried and reverted**: compensating that variable by `1/factor` so the band stays 40 physical pixels.
+It did not help and made things worse — skins such as `dsh-claude-style` mix
+`--dsh-windows-titlebar-height` into their own title-bar geometry (for example
+`box-shadow: 0 calc(-1 * var(--dsh-windows-titlebar-height)) 0 0 …`, and they re-lay the tabs after
+measuring `titleRow` / `headerUtilities` / `headerCorner`), so changing the variable breaks the skin at
+the same time and produced a *complete* overlap. The plugin therefore **no longer touches that
+variable** (`test/shim.test.html` asserts it always keeps the value the desktop wrote).
 
-**现在的做法（两种情况分别处理）**：`⇤` 开关默认开启，按下后给 `<html>` 加
-`data-dsh-window-zoom-header-left`。
+**What it does now**, in two cases. `⇤` is on by default and adds
+`data-dsh-window-zoom-header-left` to `<html>`.
 
-**情况一：装了把顶栏搬进标题栏的皮肤**（`dsh-claude-style` 的 header band）。皮肤把
-`headerUtilities` / `headerCorner` 标记成 `[data-dsh-header-actions]` / `[data-dsh-header-corner]`，
-用 `position:fixed` 钉进标题栏：
+**Case one: a skin moves the header into the title bar** (`dsh-claude-style`'s header band). The skin
+marks `headerUtilities` / `headerCorner` as `[data-dsh-header-actions]` / `[data-dsh-header-corner]`
+and pins them into the title bar with `position:fixed`:
 
 ```css
 body[data-dsh-claude-style][data-dsh-header-band~=actions] [data-dsh-header-actions],
@@ -139,108 +158,131 @@ body[data-dsh-claude-style][data-dsh-header-band~=actions] [data-dsh-header-corn
   right:var(--dsh-header-band-right)!important; }
 ```
 
-皮肤自己算过这个横向留白（`--dsh-header-band-right`，例如 `146px` = 3×46px 按钮 + 间隔），
-**但那是个"窗口像素"的值，却被当成布局像素写进 `right`**：缩放后图标跟着变大、留白却不变，
-于是正好压到最小化/最大化/关闭上。
+The skin does compute that horizontal reservation (`--dsh-header-band-right`, for example `146px` =
+3 × 46px buttons + gap), **but it is a window-pixel value written into `right` as if it were layout
+pixels**: under zoom the icons grow while the reservation does not, so they end up exactly on top of
+minimize/maximize/close.
 
-插件因此在 JS 里重发同一组偏移并**除以缩放系数**，用内联 `!important` 写回（内联 important 胜过
-皮肤样式表里的 important），从角标区开始依次向左堆叠，并垂直居中在 40px 按钮带内：
+The plugin therefore re-publishes the same offsets **divided by the factor** from JavaScript, using
+inline `!important` (inline important beats a stylesheet important), stacking the clusters leftwards
+from the corner and centring them vertically inside the 40px button band:
 
 ```js
 element.style.setProperty("position", "fixed", "important");
 element.style.setProperty("top", (40 / 2) / factor + "px", "important");
 element.style.setProperty("right", rightVisual / factor + "px", "important");
 element.style.setProperty("transform", "translateY(-50%)", "important");
-rightVisual += element.offsetWidth * factor + 8;   // 下一个容器继续往左排
+rightVisual += element.offsetWidth * factor + 8;   // the next cluster continues to the left
 ```
 
-结果是**同一水平带内横向平移**到按钮左侧（与没开插件时同样的观感），而不是掉到下面去。
-触发时机：缩放变化、窗口 resize、皮肤重新量算（`MutationObserver` 去抖 400ms）以及加载后
-0.8/2.5/6 秒各一次；关闭 `⇤` 或卸载插件时，逐条 `removeProperty` 把控制权还给皮肤。
+The result is a **horizontal translation inside the same band**, to the left of the buttons (the same
+look as with the plugin disabled) rather than dropping below them. It is re-applied when the zoom
+changes, on window resize, when the skin re-measures (`MutationObserver`, 400ms debounce) and at
+0.8/2.5/6 seconds after load; turning `⇤` off or unloading the plugin calls `removeProperty` on each one
+and hands control back to the skin.
 
-**情况二：没有这类皮肤**（容器仍在文档流里）。此时用纯 CSS 把它们排到顶栏最左：
+**Case two: no such skin** (the containers are still in the document flow). Then plain CSS puts them at
+the far left of the header:
 
 ```css
 html[data-dsh-window-zoom-header-left]
   header:has(> [class*=titleRow]):has([class*=headerCorner],[class*=headerUtilities]) {
-    grid-template-columns: auto auto minmax(0,1fr) !important;   /* 角标 | leading | 标题行 */
+    grid-template-columns: auto auto minmax(0,1fr) !important;   /* corner | leading | title row */
 }
-/* headerCorner → 第 1 列；headerLeading → 第 2 列；titleRow → 第 3 列，
-   titleRow 里的 headerUtilities 与 titleCluster 里的 headerActions 都用 order:-1
-   提到标题/面包屑前面 */
+/* headerCorner → column 1; headerLeading → column 2; titleRow → column 3,
+   and inside titleRow the headerUtilities — like headerActions inside titleCluster —
+   is pulled ahead of the title/crumbs with order:-1 */
 ```
 
-（皮肤在情况一下把这两个容器变成 `position:fixed`，网格规则对它们自然失效，两条路径互不干扰。）
+(The skin makes those two containers `position:fixed` in case one, so the grid rules no longer apply to
+them and the two paths never interfere.)
 
-- 选择器只命中**会话顶栏**（唯一同时拥有 `titleRow` 与 `headerCorner`/`headerUtilities` 的
-  `header`），平台视图、设置面板等其它 surfaces 不受影响。
-- 结构取自 `@deepseek-ai/dsh-client-ui-conversation` 的真实 JSX 与 CSS：`header` 是
-  `grid(auto minmax(0,1fr))`，`titleRow` 是 flex 且含 `titleCluster` + `headerUtilities`，
-  `headerCorner` 是与 `titleRow` 同级的 grid 项。`test/header.test.html` 用这份结构搭了 mock，
-  断言左移后 utilities 落在标题簇左侧、角标最靠左、并且 150% 缩放下依然成立、卸载后完全还原。
-- `!important` 只用于压过皮肤对同一批容器的规则。
+- The selector only matches the **session header** (the only `header` that has both a `titleRow` and
+  `headerCorner`/`headerUtilities`), so the platform view, the settings panels and other surfaces are
+  untouched.
+- The structure comes from the real JSX and CSS of `@deepseek-ai/dsh-client-ui-conversation`: `header`
+  is `grid(auto minmax(0,1fr))`, `titleRow` is a flex row holding `titleCluster` + `headerUtilities`,
+  and `headerCorner` is a grid item next to `titleRow`. `test/header.test.html` builds a mock from that
+  structure and asserts that after the move the utilities sit left of the title cluster, the corner is
+  leftmost, the same still holds at 150% zoom, and unloading restores everything.
+- `!important` is used only to beat the skin's rules for the same containers.
 
-### 顶栏自诊断
+### Header self-diagnostic
 
-顶栏的真实结构取决于装了什么皮肤（`dsh-claude-style` 会自己重排、搬动这些容器），所以插件带一个
-自诊断：客户端把**顶栏子树**（每个节点的 tag、class、屏幕坐标、定位方式、可见文字）以及所有贴在
-窗口顶部的 `fixed`/`absolute` 元素，POST 给宿主半区；宿主写到
+The header's real shape depends on which skin is installed (`dsh-claude-style` re-lays and moves these
+containers itself), so the plugin ships a self-diagnostic: the client POSTs the **header subtree** (tag,
+class, screen coordinates, positioning and visible text of every node) plus every `fixed`/`absolute`
+element along the window's top edge to the host half, which writes it to
 
 ```
-<DSH_HOME>/window-zoom-header-dump.json      # 本机为 C:\Users\雷神\.dsh\window-zoom-header-dump.json
+<DSH_HOME>/window-zoom-header-dump.json      # on this machine C:\Users\雷神\.dsh\window-zoom-header-dump.json
 ```
 
-- 路由 `POST /api/dsh-window-zoom/header-dump` **只接受回环请求**（host 必须是 localhost/127.0.0.1/[::1]
-  且 `sec-fetch-site` 非 cross-site），其余一律 403；请求体上限 512KB。
-- 触发时机：页面加载后 2 秒、6 秒各一次，之后顶栏有变化时去抖 1.5 秒再写；**每次页面加载最多 8 次**，
-  始终覆盖同一个文件。内容只有结构与坐标，不含图片或凭据。
-- 宿主半区是**新增**代码，改完需要**重启 DSH 桌面端**（宿主进程）才会挂上这条路由；只刷新页面不会。
+- The route `POST /api/dsh-window-zoom/header-dump` **only accepts loopback requests** (host must be
+  localhost/127.0.0.1/[::1] and `sec-fetch-site` must not be cross-site); everything else gets a 403.
+  The body is capped at 512KB.
+- It fires 2s and 6s after page load and then, debounced by 1.5s, whenever the header changes — **at
+  most 8 times per page load**, always overwriting the same file. It contains structure and coordinates
+  only, no images and no credentials.
+- The host half is **new** code: the route only appears after **restarting the DSH desktop app** (the
+  host process); a page refresh is not enough.
 
-## 已知限制
+## Known limitations
 
-- 外壳里少量 `max-height: calc(100vh …)` / `100dvh` 的弹层（长菜单、确认框、图片灯箱）不会跟随
-  缩放：`vh` 不参与根元素缩放补偿。这些元素按内容收缩，日常几乎看不出差别。
-- 本方案是「整体放大」而不是浏览器缩放：布局视口宽度不变，媒体查询仍按原始宽度判定，
-  因此放大后不会触发响应式换行，而是像窗口变窄一样更紧凑。
-- 坐标校正是对 DOM 原型的全局补丁（这是修复上述问题的唯一途径，桌面端的渲染进程是沙箱 + 
-  `contextIsolation`，拿不到 Electron 的真缩放）。它只在与"无缩放"一致的方向上改数值，原生平台
-  视图那一棵子树已显式豁免（见上），但第三方库若主动依赖**视觉**坐标（例如把 rect 画到按视觉像素
-  设尺寸的 canvas 上）仍可能受影响；遇到时点 `⇔` 关闭即可对比。
-- 打开桌面端原生平台视图（用量、充值等）时，该视图覆盖窗口 DOM，缩放控件被挡住属预期行为：
-  原生子视图始终绘制在窗口 web 内容之上，插件无法越过它。
+- A few overlays in the shell use `max-height: calc(100vh …)` / `100dvh` and do not follow the zoom,
+  because `vh` takes no part in root-zoom compensation. They size to their content, so this is rarely
+  visible in practice.
+- This is a "magnify everything" approach rather than browser zoom: the layout viewport keeps its width
+  and media queries still see it, so zooming in does not trigger responsive reflow — the UI becomes
+  tighter, like a narrower window.
+- The coordinate correction patches DOM prototypes globally (the only way to fix the problems above:
+  the desktop renderer is sandboxed with `contextIsolation`, so Electron's real zoom is unreachable). It
+  only changes values in the direction of "as if there were no zoom", and the native platform view
+  subtree is explicitly exempt (see above) — but a third-party library that deliberately relies on
+  **visual** coordinates (for example drawing a rect onto a canvas sized in visual pixels) can still be
+  affected; click `⇔` off to compare when that happens.
+- Opening the desktop's native platform view (usage, top-up, …) covers the window DOM, so the zoom
+  control being hidden then is expected: a native child view always paints above the window's web
+  content and a plugin cannot get past it.
 
-## 测试
+## Tests
 
 ```powershell
 chrome --headless=new --disable-gpu --force-device-scale-factor=1 --window-size=900,600 `
        --virtual-time-budget=8000 --dump-dom test/shim.test.html
 ```
 
-- `test/shim.test.html`（53 项）：坐标校正的回归测试。复现弹层定位、视口夹取、页签度量与
-  Lexical blockCursor 四种调用模式，用**修补前捕获的原生 rect** 断言屏幕上的真实位置；另外断言
-  平台 overlay 的 rect 保持窗口 DIP、豁免不外溢、标题栏条带变量始终未被插件改动，并验证关闭 shim
-  时那些位置断言必然失败、卸载后原型与变量完全还原。
-- `test/header.test.html`（23 项）：顶栏控件左移的回归测试，两种场景——无皮肤时靠网格/`order`
-  在文档流里左移；有皮肤时按缩放系数重发标题栏偏移。断言含"留在 40px 按钮带内""横向避开按钮区"
-  "两容器不重叠""偏移 = 146/系数""关闭与卸载后内联样式清空"。
-- `test/client.test.html`（47 项）：控件、四角停靠、上下限、持久化、键盘回退、Ctrl+滚轮、
-  官方快捷键服务注册、卸载还原。
-- `test/space-probe.html`：上面那张"哪个 API 属于哪个空间"的实测页（带 `100%/1.5` 过度补偿对照）。
-- `test/zoom-semantics.html`：`100%` 链与 `100vh` 在根元素缩放下的实测页。
-- `test/caret-click.html` + `test/cdp-click.mjs`：用 CDP 注入真实点击，验证缩放后点击落点仍然正确。
-- `test/caret.html`、`test/cdp-caret.mjs`：原生光标绘制的探针（无头环境下 Chromium 不绘制光标，
-  因此结论以点击落点为准）。
-- `test/preview.html` + `test/preview-control.png`：控件外观预览与截图。
+- `test/shim.test.html` (53 assertions): regression test for the coordinate correction. It reproduces
+  four call patterns — popover placement, viewport clamping, tab metrics and the Lexical block cursor —
+  and asserts the real on-screen position using the **native rect captured before any patching**. It
+  also asserts that the platform overlay's rect stays in window DIP, that the exemption does not leak,
+  and that the caption-strip variable is never touched by the plugin; with the shim off those geometry
+  assertions all fail, and after unload the prototypes and variables are fully restored.
+- `test/header.test.html` (23 assertions): regression test for moving the header controls, in two
+  scenarios — without a skin the grid/`order` path moves them in the flow; with a skin the title-bar
+  offsets are re-published divided by the factor. Assertions include "stays inside the 40px button
+  band", "clear of the caption buttons horizontally", "the two clusters do not overlap",
+  "offset = 146 / factor", and "inline styles are cleared when disabled or unloaded".
+- `test/client.test.html` (47 assertions): the control, the four docks, the limits, persistence, the
+  keyboard fallback, Ctrl+wheel, registration with the official shortcut service, and unload.
+- `test/space-probe.html`: the measurement page behind the "which API belongs to which space" table,
+  including the `100%/1.5` over-compensation control.
+- `test/zoom-semantics.html`: the measurement page for the `100%` chain and `100vh` under root zoom.
+- `test/caret-click.html` + `test/cdp-click.mjs`: inject real clicks over CDP and verify that clicks
+  still land correctly after zooming.
+- `test/caret.html`, `test/cdp-caret.mjs`: probes for native caret painting (headless Chromium does not
+  paint a caret, so the click landing is the authoritative evidence).
+- `test/preview.html` + `test/preview-control.png`: control appearance preview and screenshot.
 
-## 文件
+## Files
 
-| 路径 | 作用 |
+| Path | What it is |
 | --- | --- |
-| `lib/client.js` | 浏览器半区：控件、快捷键、滚轮、持久化、缩放施加、坐标校正 |
-| `lib/index.js` | 宿主半区：仅诊断路由（回环限定） |
-| `cordis.patch.yml` | profile 补丁：插入 `window-zoom` 插件行 |
-| `test/*.html`、`test/*.mjs` | 无头 Chromium 测试、实测页与 CDP 驱动 |
-| `test/preview-control.png` | 控件外观截图 |
+| `lib/client.js` | browser half: control, shortcuts, wheel, persistence, applying zoom, coordinate correction, header placement |
+| `lib/index.js` | host half: the loopback-only diagnostic route |
+| `cordis.patch.yml` | profile patch: inserts the `window-zoom` plugin row |
+| `test/*.html`, `test/*.mjs` | headless Chromium tests, measurement pages and CDP drivers |
+| `test/preview-control.png` | screenshot of the control |
 
 ## License
 
